@@ -1,0 +1,103 @@
+#!/usr/local/bin/knife exec
+#
+# dumps chef data to the knife configuration directory Chef::Config[:knife][:chef_server_backup_dir]
+# as specified in /root/.chef/knife.rb
+#
+# Author:: Joshua Timberman (<joshua@opscode.com>)
+# Author:: Adam Jacob (<adam@opscode.com>)
+# Author:: Manuel Amador (rudd-o@rudd-o.com)
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+Chef::Config[:solo] = false
+
+class Opscode
+  class Backup
+    attr_accessor :backup_dir
+
+    def initialize
+      @backup_dir = Chef::Config[:knife][:chef_server_backup_dir] ? Chef::Config[:knife][:chef_server_backup_dir] : File.join(".chef", "chef_server_backup")
+    end
+
+    def backup
+      nodes
+      roles
+      data_bags
+      api_clients
+    end
+
+    def nodes
+      backup_standard("nodes", Chef::Node)
+    end
+
+    def roles
+      backup_standard("roles", Chef::Role)
+    end
+
+    def api_clients
+      backup_standard("clients", Chef::ApiClient)
+    end
+
+    def data_bags
+      dir = File.join(@backup_dir, "data_bags")
+      system("mkdir -p #{dir}")
+      existing = Dir.glob(File.join(dir,"*"))
+      Chef::DataBag.list.each do |bag_name, url|
+        system("mkdir -p #{File.join(dir, bag_name)}")
+        existing.delete(File.join(dir, bag_name))
+        existingdbagitems = Dir.glob(File.join(dir, bag_name, "*"))
+        Chef::DataBag.load(bag_name).each do |item_name, url|
+          Chef::Log.info("Backing up data bag #{bag_name} item #{item_name}")
+          item = Chef::DataBagItem.load(bag_name, item_name)
+          dbagitemfilename = File.join(dir, bag_name, "#{item_name}.json")
+          existingdbagitems.delete(dbagitemfilename)
+          File.open(dbagitemfilename, "w") do |dbag_file|
+            dbag_file.print(item.to_json)
+          end
+        end
+        existingdbagitems.each do |f|
+          File.delete(f)
+        end
+      end
+      existing.each do |dir|
+        Dir.glob(File.join(dir,"*")).each do |f|
+          File.delete(f)
+        end
+        Dir.rmdir(dir)
+      end
+    end
+
+    def backup_standard(component, klass)
+      dir = File.join(@backup_dir, component)
+      system("mkdir -p #{dir}")
+      existing = Dir.glob(File.join(dir,"*"))
+      klass.list.each do |component_name, url|
+        Chef::Log.info("Backing up #{component} #{component_name}")
+        component_obj = klass.load(component_name)
+        filename = File.join(dir, "#{component_name}.json")
+        existing.delete(filename)
+        File.open(filename, "w") do |component_file|
+          component_file.print(component_obj.to_json)
+        end
+      end
+      existing.each do |f|
+        File.delete(f)
+      end
+    end
+
+  end
+end
+
+b = Opscode::Backup.new
+b.backup
